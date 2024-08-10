@@ -104,7 +104,7 @@ class ComputeLoss:
     sort_obj_iou = False
 
     # Compute losses
-    def __init__(self, model, autobalance=False,pruning=False,sr=1e-5):
+    def __init__(self, model, autobalance=False,pruning=None,sr=1e-5):
         self.sort_obj_iou = False
         self.pruning=pruning
         self.l1_lambda = sr
@@ -200,7 +200,7 @@ class ComputeLoss:
         lcls *= self.hyp["cls"]
         bs = tobj.shape[0]  # batch size
         
-        if self.pruning:
+        if self.pruning is not None:
             lgamma = torch.zeros(1, device=device)
             gammas = torch.cat(self.bn_gamma)
             zeros = torch.zeros_like(gammas)

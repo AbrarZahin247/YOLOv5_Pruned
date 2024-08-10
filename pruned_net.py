@@ -1,11 +1,57 @@
-from utils.pruning import eval_l1_sparsity, prune, weight_transfer
 import torch
 import torch.nn as nn
 from models.yolo import Model
 import yaml
-from utils.torch_utils import intersect_dicts
+from utils.torch_utils import select_device,prune
+from utils.general import intersect_dicts
 import argparse
 import os
+
+
+
+def eval_l1_sparsity(model):
+    """
+    Evaluate the L1 sparsity of a PyTorch model.
+    
+    Args:
+        model (nn.Module): The model to evaluate sparsity for.
+    
+    Returns:
+        float: The proportion of zero (or near-zero) weights in the model.
+    """
+    total_weights = 0
+    zero_weights = 0
+    
+    for param in model.parameters():
+        if param.requires_grad:  # Only consider weights that require gradients (i.e., trainable weights)
+            total_weights += param.numel()
+            zero_weights += (param.abs() < 1e-5).sum().item()
+    
+    sparsity = zero_weights / total_weights
+    return sparsity
+
+def weight_transfer(original_model, pruned_model, mask):
+    """
+    Transfers weights from the original model to the pruned model according to the mask.
+    
+    Args:
+        original_model (nn.Module): The original model with full weights.
+        pruned_model (nn.Module): The pruned model where weights will be transferred.
+        mask (dict): A dictionary where the keys are layer names and the values are masks (1 for keep, 0 for prune).
+    
+    Returns:
+        nn.Module: The pruned model with weights transferred from the original model.
+    """
+    with torch.no_grad():
+        for (orig_name, orig_param), (pruned_name, pruned_param) in zip(original_model.state_dict().items(), pruned_model.state_dict().items()):
+            if orig_name in mask:  # Check if this layer has a corresponding mask
+                # Apply the mask: copy only the unpruned weights from the original model to the pruned model
+                pruned_param.data.copy_(orig_param.data * mask[orig_name])
+            else:
+                # If there's no mask for this layer, simply copy the weights from the original model
+                pruned_param.data.copy_(orig_param.data)
+    
+    return pruned_model
 
 def load_model_from_checkpoint(weight, device="cuda:0"):
     """
@@ -28,11 +74,12 @@ def save_pruned_model(ckpt, new_model, save_dir, pruning_ratio):
     ckpt["best_fitness"] = 0.0
     torch.save(ckpt, os.path.join(save_dir, model_name))
 
-def prune_net(weight, save_dir="pruned_net", pruning_ratio=0.5, device="cuda:0"):
+def prune_net(weight, batch_size,device,pruning_ratio,save_dir="pruned_net_saved_dir"):
     """
     Prune the YOLO model based on the L1 sparsity and save the pruned model.
     """
     try:
+        device = select_device(device, batch_size=batch_size)
         # Load the model
         model, ckpt = load_model_from_checkpoint(weight, device)
         
@@ -78,8 +125,9 @@ if __name__ == "__main__":
     parser.add_argument('--weight', type=str, required=True, help='Path to YOLOv5 checkpoint.')
     parser.add_argument('--save_dir', type=str, default="pruned_net", help='Path to save output files.')
     parser.add_argument('--pruning_ratio', type=float, default=0.3, help='Pruning ratio')
-    parser.add_argument('--device', type=str, default="cuda:0", help='Device to use for pruning (e.g., "cpu" or "cuda:0")')
+    parser.add_argument('--device', default="0", help='Device to use for pruning (e.g., "cpu" or "cuda:0")')
+    parser.add_argument("--batch_size", type=int, default=8, help="total batch size for all GPUs, -1 for autobatch")
     
     args = parser.parse_args()
-    prune_net(args.weight, args.save_dir, args.pruning_ratio, args.device)
+    prune_net(weight=args.weight, save_dir=args.save_dir, pruning_ratio=args.pruning_ratio, device=args.device,batch_size=args.batch_size)
 
