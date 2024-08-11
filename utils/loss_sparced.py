@@ -101,118 +101,105 @@ class QFocalLoss(nn.Module):
 
 
 class ComputeLoss:
-    sort_obj_iou = False
-
-    # Compute losses
-    def __init__(self, model, autobalance=False,pruning=None,sr=1e-5):
+    def __init__(self, model, autobalance=False, pruning=None, sr=1e-5):
+        """
+        Initializes ComputeLoss with model, autobalance, pruning, and sparsity regularization (sr) options.
+        """
         self.sort_obj_iou = False
-        self.pruning=pruning
+        self.pruning = pruning
         self.l1_lambda = sr
-        self.bn_gamma = []
-        for k, v in model.named_modules():
-            if isinstance(v, nn.BatchNorm2d):
-                self.bn_gamma.append(v.weight)
-        """Initializes ComputeLoss with model and autobalance option, autobalances losses if True."""
-        device = next(model.parameters()).device  # get model device
-        h = model.hyp  # hyperparameters
-
-        # Define criteria
-        BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h["cls_pw"]], device=device))
-        BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h["obj_pw"]], device=device))
-
-        # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
-        self.cp, self.cn = smooth_BCE(eps=h.get("label_smoothing", 0.0))  # positive, negative BCE targets
-
-        # Focal loss
-        g = h["fl_gamma"]  # focal loss gamma
-        if g > 0:
-            BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
-
-        m = de_parallel(model).model[-1]  # Detect() module
-        self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  # P3-P7
-        self.ssi = list(m.stride).index(16) if autobalance else 0  # stride 16 index
-        self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
-        self.na = m.na  # number of anchors
-        self.nc = m.nc  # number of classes
-        self.nl = m.nl  # number of layers
+        self.bn_gamma = [v.weight for k, v in model.named_modules() if isinstance(v, nn.BatchNorm2d)]
+        self.device = next(model.parameters()).device
+        self.hyp = model.hyp
+        
+        # Initialize loss functions
+        self.BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([self.hyp["cls_pw"]], device=self.device))
+        self.BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([self.hyp["obj_pw"]], device=self.device))
+        
+        self.cp, self.cn = self.smooth_BCE(self.hyp.get("label_smoothing", 0.0))
+        
+        if self.hyp["fl_gamma"] > 0:
+            self.BCEcls = FocalLoss(self.BCEcls, self.hyp["fl_gamma"])
+            self.BCEobj = FocalLoss(self.BCEobj, self.hyp["fl_gamma"])
+        
+        m = de_parallel(model).model[-1]
+        self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])
+        self.ssi = list(m.stride).index(16) if autobalance else 0
+        self.gr = 1.0
+        self.autobalance = autobalance
+        self.na = m.na
+        self.nc = m.nc
+        self.nl = m.nl
         self.anchors = m.anchors
-        self.device = device
-    
-    def l1_gamma(self, gammas, zeros):
+
+    def smooth_BCE(self, eps=0.1):
+        """
+        Apply label smoothing to the BCE targets.
+        """
+        return 1.0 - 0.5 * eps, 0.5 * eps
+
+    def l1_gamma(self, gammas):
         """
         Compute L1 regularization for BatchNorm gamma parameters.
         """
-        return torch.norm(gammas - zeros, 1)
+        return torch.norm(gammas, 1)
 
-    def __call__(self, p, targets):  # predictions, targets
+    def __call__(self, p, targets):
+        """
+        Compute the total loss including classification, box, objectness, and optionally pruning.
+        """
         device = targets.device
-        """Performs forward pass, calculating class, box, and object loss for given predictions and targets."""
-        lcls = torch.zeros(1, device=self.device)  # class loss
-        lbox = torch.zeros(1, device=self.device)  # box loss
-        lobj = torch.zeros(1, device=self.device)  # object loss
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
+        lcls = torch.zeros(1, device=self.device)
+        lbox = torch.zeros(1, device=self.device)
+        lobj = torch.zeros(1, device=self.device)
+        tcls, tbox, indices, anchors = self.build_targets(p, targets)
 
-        # Losses
-        for i, pi in enumerate(p):  # layer index, layer predictions
-            b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
-            tobj = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)  # target obj
-
-            n = b.shape[0]  # number of targets
+        for i, pi in enumerate(p):
+            b, a, gj, gi = indices[i]
+            tobj = torch.zeros_like(pi[..., 0], device=self.device)
+            n = b.shape[0]
+            
             if n:
-                # pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
-                pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)  # target-subset of predictions
-
-                # Regression
+                pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
-                pbox = torch.cat((pxy, pwh), 1)  # predicted box
-                iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()  # iou(prediction, target)
-                lbox += (1.0 - iou).mean()  # iou loss
-
-                # Objectness
+                pbox = torch.cat((pxy, pwh), 1)
+                iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()
+                lbox += (1.0 - iou).mean()
+                
                 iou = iou.detach().clamp(0).type(tobj.dtype)
                 if self.sort_obj_iou:
                     j = iou.argsort()
                     b, a, gj, gi, iou = b[j], a[j], gj[j], gi[j], iou[j]
                 if self.gr < 1:
                     iou = (1.0 - self.gr) + self.gr * iou
-                tobj[b, a, gj, gi] = iou  # iou ratio
-
-                # Classification
-                if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
+                tobj[b, a, gj, gi] = iou
+                
+                if self.nc > 1:
+                    t = torch.full_like(pcls, self.cn, device=self.device)
                     t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(pcls, t)  # BCE
-
-                # Append targets to text file
-                # with open('targets.txt', 'a') as file:
-                #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
-
-            obji = self.BCEobj(pi[..., 4], tobj)
-            lobj += obji * self.balance[i]  # obj loss
+                    lcls += self.BCEcls(pcls, t)
+            
+            lobj += self.BCEobj(pi[..., 4], tobj) * self.balance[i]
             if self.autobalance:
-                self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
+                self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / lobj.detach().item()
 
         if self.autobalance:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
+
         lbox *= self.hyp["box"]
         lobj *= self.hyp["obj"]
         lcls *= self.hyp["cls"]
-        bs = tobj.shape[0]  # batch size
+        bs = tobj.shape[0]
         
         if self.pruning is not None:
-            lgamma = torch.zeros(1, device=device)
             gammas = torch.cat(self.bn_gamma)
-            zeros = torch.zeros_like(gammas)
-            lgamma += self.l1_lambda * self.l1_gamma(gammas, zeros)
+            lgamma = self.l1_lambda * self.l1_gamma(gammas)
             loss = lbox + lobj + lcls + lgamma
-            return loss * bs, torch.cat((lbox, lobj, lcls, lgamma)).detach()  # batchsize scaled loss 
+            return loss * bs, torch.cat((lbox, lobj, lcls, lgamma)).detach()
 
-        else:
-            loss = lbox + lobj + lcls
+        loss = lbox + lobj + lcls
         return loss * bs, torch.cat((lbox, lobj, lcls)).detach()
-
-        # 
 
     def build_targets(self, p, targets):
         """Prepares model targets from input targets (image,class,x,y,w,h) for loss computation, returning class, box,

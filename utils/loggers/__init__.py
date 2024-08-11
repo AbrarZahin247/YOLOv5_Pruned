@@ -251,21 +251,31 @@ class Loggers:
     def on_fit_epoch_end(self, vals, epoch, best_fitness, fi):
         """Callback that logs metrics and saves them to CSV or NDJSON at the end of each fit (train+val) epoch."""
         x = dict(zip(self.keys, vals))
+        # print(x)
+        
         if self.csv:
             file = self.save_dir / "results.csv"
-            n = len(x) + 1  # number of cols
-            s = "" if file.exists() else (("%20s," * n % tuple(["epoch"] + self.keys)).rstrip(",") + "\n")  # add header
+            n = len(x) + 1  # number of columns (including the epoch column)
+
+            # Create header if file does not exist
+            if not file.exists():
+                header = ("%20s," * n % tuple(["epoch"] + self.keys)).rstrip(",") + "\n"
+            else:
+                header = ""
+
+            # Create the data row
+            data_row = ("%20.5g," * n % tuple([epoch] + vals)).rstrip(",") + "\n"
+            
+            # Write header and data row to file
             with open(file, "a") as f:
-                f.write(s + ("%20.5g," * n % tuple([epoch] + vals)).rstrip(",") + "\n")
+                f.write(header + data_row)
+        
         if self.ndjson_console or self.ndjson_file:
             json_data = json.dumps(dict(epoch=epoch, **x), default=_json_default)
+        
         if self.ndjson_console:
             print(json_data)
-        if self.ndjson_file:
-            file = self.save_dir / "results.ndjson"
-            with open(file, "a") as f:
-                print(json_data, file=f)
-
+        
         if self.tb:
             for k, v in x.items():
                 self.tb.add_scalar(k, v, epoch)
