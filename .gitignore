@@ -26,6 +26,8 @@
 storage.googleapis.com
 runs/*
 data/*
+Okutama_Train_Val_Test/*
+Test_Okutama_Dataset/*
 data/images/*
 !data/*.yaml
 !data/hyps
