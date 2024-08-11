@@ -101,7 +101,7 @@ class QFocalLoss(nn.Module):
 
 
 class ComputeLoss:
-    def __init__(self, model, autobalance=False, pruning=None, sr=1e-5):
+    def __init__(self, model, autobalance=False, pruning=False, sr=1e-5):
         """
         Initializes ComputeLoss with model, autobalance, pruning, and sparsity regularization (sr) options.
         """
@@ -192,11 +192,12 @@ class ComputeLoss:
         lcls *= self.hyp["cls"]
         bs = tobj.shape[0]
         
-        if self.pruning is not None:
+        if self.pruning:
             gammas = torch.cat(self.bn_gamma)
             lgamma = self.l1_lambda * self.l1_gamma(gammas)
+            lgamma = lgamma.unsqueeze(0)
             loss = lbox + lobj + lcls + lgamma
-            return loss * bs, torch.cat((lbox, lobj, lcls, lgamma)).detach()
+            return loss * bs, torch.cat((lbox, lobj, lcls)).detach()
 
         loss = lbox + lobj + lcls
         return loss * bs, torch.cat((lbox, lobj, lcls)).detach()

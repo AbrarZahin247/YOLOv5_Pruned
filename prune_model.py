@@ -1,9 +1,9 @@
 import torch.nn.utils.prune as prune
 import torch.nn as nn
 
-def prune_channels_and_weights(model, channel_threshold=1e-3, weight_threshold=0.5):
+def prune_channels_and_weights(model, channel_threshold, weight_threshold):
     for module in model.modules():
-        if isinstance(module, nn.BatchNorm2d):
+        if isinstance(module, nn.BatchNorm2d) and channel_threshold is not None:
             # Channel pruning based on BatchNorm's gamma (weight) values
             mask = module.weight.abs() > channel_threshold
             pruned_channels = mask.sum().item()

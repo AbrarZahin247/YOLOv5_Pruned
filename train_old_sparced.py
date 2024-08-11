@@ -80,7 +80,7 @@ from utils.general import (
 )
 from utils.loggers import LOGGERS, Loggers
 from utils.loggers.comet.comet_utils import check_comet_resume
-# from utils.loss import ComputeLoss
+from prune_model import prune_channels_and_weights
 from utils.loss_sparced import ComputeLoss
 from utils.metrics import fitness
 from utils.plots import plot_evolve
@@ -98,12 +98,8 @@ from utils.torch_utils import (
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv("RANK", -1))
 WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
-GIT_INFO = check_git_info()
+# GIT_INFO = check_git_info()
 
-## for windows only
-# import pathlib
-# temp = pathlib.PosixPath
-# pathlib.PosixPath = pathlib.WindowsPath
 
 def train(hyp, opt, device, callbacks):
     """
@@ -360,7 +356,7 @@ def train(hyp, opt, device, callbacks):
     scaler = torch.cuda.amp.GradScaler(enabled=amp)
     stopper, stop = EarlyStopping(patience=opt.patience), False
     # compute_loss = ComputeLoss(model)  # init loss class
-    compute_loss = ComputeLoss(model,pruning=True,sr=opt.sr)
+    compute_loss = ComputeLoss(model,pruning=opt.slimming,sr=opt.sr)
     callbacks.run("on_train_start")
     LOGGER.info(
         f'Image sizes {imgsz} train, {imgsz} val\n'
@@ -369,6 +365,10 @@ def train(hyp, opt, device, callbacks):
         f'Starting training for {epochs} epochs...'
     )
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
+        ## slimming the model on each 10th iteration
+        if(opt.slimming):
+            model=prune_channels_and_weights(model=model,channel_threshold=opt.channel_pruning,weight_threshold=opt.weight_pruning)
+
         callbacks.run("on_train_epoch_start")
         model.train()
 
@@ -382,7 +382,9 @@ def train(hyp, opt, device, callbacks):
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
-        mloss = torch.zeros(3, device=device)  # mean losses
+        
+        mloss = torch.zeros(3, device=device)
+        # mloss = torch.zeros(3, device=device)  # mean losses
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
         pbar = enumerate(train_loader)
@@ -472,6 +474,7 @@ def train(hyp, opt, device, callbacks):
                     plots=False,
                     callbacks=callbacks,
                     compute_loss=compute_loss,
+                    slimming=True
                 )
 
             # Update best mAP
@@ -481,6 +484,9 @@ def train(hyp, opt, device, callbacks):
                 best_fitness = fi
             log_vals = list(mloss) + list(results) + lr
             callbacks.run("on_fit_epoch_end", log_vals, epoch, best_fitness, fi)
+            
+           
+                                
 
             # Save model
             if (not nosave) or (final_epoch and not evolve):  # if save
@@ -492,7 +498,7 @@ def train(hyp, opt, device, callbacks):
                     "updates": ema.updates,
                     "optimizer": optimizer.state_dict(),
                     "opt": vars(opt),
-                    "git": GIT_INFO,  # {remote, branch, commit} if a git repo
+                    # "git": GIT_INFO,  # {remote, branch, commit} if a git repo
                     "date": datetime.now().isoformat(),
                 }
 
@@ -608,8 +614,6 @@ def parse_opt(known=False):
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
-
-
     parser.add_argument('--slimming', default=True, help='train model with l1 sparsity')
     parser.add_argument('--sr', type=float, default=0.00001,help='sparsity rate')
     parser.add_argument("--channel_pruning",type=float, default=None, help="pruning x percentage of weight with small magnitude")
