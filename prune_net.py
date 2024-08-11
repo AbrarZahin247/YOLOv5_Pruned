@@ -18,7 +18,7 @@ def prune_model(weights_path,save_dir='pruned_models',pruning_ratio=0.5,anchors=
     
     w = Path(save_dir) / "weights"
     w.mkdir(parents=True, exist_ok=True)
-    sparced = w / "sparced.pt"
+    sparced = w / "pruned.pt"
     
     prune(model=model,amount=pruning_ratio)
     from copy import deepcopy

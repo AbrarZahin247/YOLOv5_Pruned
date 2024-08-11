@@ -1,2 +1,7 @@
 python pruned_net.py --weight runs/train/yolov5n_okutama_slimming26/weights/best.pt --pruning_ratio 0.7 --batch_size 16 --device 1
+------------------------------
+python train.py --data custom_data.yaml --weight pruned_models/weights/pruned.pt --batch-size 100 --device 1 --epochs 50
+
+
+runs/train/yolov5n_okutama_slimming26/weights/best.pt --pruning_ratio 0.7 --batch_size 16 --device 1
 
