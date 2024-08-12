@@ -372,6 +372,7 @@ def train(hyp, opt, device, callbacks):
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         ## prune model and remove unncecessary weights and channels
         if(opt.slimming and epochs//10==5):
+            LOGGER.info(f"Model is now under pruning with channel prunning threshold {opt.channel_pruning} and weight pruning percentage {opt.weight_pruning}")
             model=prune_channels_and_weights(model=model,channel_threshold=opt.channel_pruning,weight_threshold=opt.weight_pruning)
         
         callbacks.run("on_train_epoch_start")
