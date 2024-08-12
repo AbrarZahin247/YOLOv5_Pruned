@@ -3,5 +3,5 @@ python pruned_net.py --weight runs/train/yolov5n_okutama_slimming26/weights/best
 python train.py --data custom_data.yaml --weight pruned_models/weights/pruned.pt --batch-size 100 --device 1 --epochs 50
 ------------------------------
 
-python train_sparced.py --data custom_data.yaml --cfg models/yolov5n_light_attention.yaml --batch-size 100 --device 0 --epochs 10 --slimming True --imgsz 640 --weight_pruning 0.7
+python train_sparced.py --weights '' --data custom_data.yaml --cfg models/yolov5n_light_attention.yaml --batch-size 100 --device 0 --epochs 10 --slimming True --imgsz 640 --weight_pruning 0.7
 

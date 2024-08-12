@@ -371,7 +371,7 @@ def train(hyp, opt, device, callbacks):
     )
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         ## prune model and remove unncecessary weights and channels
-        if(opt.slimming and epochs//10==0):
+        if(opt.slimming and epochs//10==5):
             model=prune_channels_and_weights(model=model,channel_threshold=opt.channel_pruning,weight_threshold=opt.weight_pruning)
         
         callbacks.run("on_train_epoch_start")
