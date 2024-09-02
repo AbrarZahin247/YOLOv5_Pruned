@@ -5,3 +5,5 @@ python train.py --data custom_data.yaml --weight pruned_models/weights/pruned.pt
 
 python train_sparced.py --weights '' --data custom_data.yaml --cfg models/yolov5n_light_attention.yaml --batch-size 100 --device 0 --epochs 10 --slimming True --imgsz 640 --weight_pruning 0.7
 
+=======================
+python train_gradnorm.py --data custom_data.yaml --weight pruned_normal_10ep_trained_yolov5n_70perc_pruned_0_7.pt --imgsz 640 --epochs 10 --batch-size 32 --device 0
